@@ -193,6 +193,16 @@ https://wantmymtv.xyz`;
   }
 });
 
+// --- Health check server (keeps Railway happy) ---
+const http = require("http");
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("The Rewinder is broadcasting.");
+}).listen(PORT, () => {
+  console.log(`Health check listening on port ${PORT}`);
+});
+
 // --- Startup ---
 console.log("🎬 The Rewinder is live. Broadcasting from the booth...");
 console.log(`Model: ${MODEL}`);
