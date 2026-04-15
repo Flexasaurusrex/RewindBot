@@ -18,6 +18,14 @@ if (!ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
+// --- Crash safety ---
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
+
 // --- HTTP server (Railway requires a listening port) ---
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -196,7 +204,7 @@ function startBot() {
       });
     } catch (err) {
       console.error("API error:", err.message);
-      bot.sendMessage(chatId, "signal's choppy right now. try again in a sec.");
+      bot.sendMessage(chatId, "signal's choppy right now. try again in a sec.").catch(() => {});
     }
   });
 }
