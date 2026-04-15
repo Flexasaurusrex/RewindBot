@@ -142,13 +142,30 @@ Direct users to specific channels based on their interests:
 - Keep responses concise for Telegram — usually 2-4 short paragraphs max`;
 
 // --- Bot logic ---
-function startBot() {
+async function startBot() {
   console.log("🎬 The Rewinder is live. Broadcasting from the booth...");
   console.log("Model:", MODEL);
 
-  const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+  // Start with polling disabled so we can clear any existing webhook first
+  const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
   const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
   const conversations = new Map();
+
+  // Validate token and clear any webhook before starting polling
+  try {
+    const me = await bot.getMe();
+    console.log(`✅ Bot verified: @${me.username} (${me.first_name})`);
+    await bot.deleteWebhook();
+    console.log("✅ Webhook cleared");
+  } catch (err) {
+    console.error("❌ Failed to verify bot or clear webhook:", err.message);
+    console.error("Check that TELEGRAM_TOKEN is correct in Railway env vars");
+    process.exit(1);
+  }
+
+  // Now start polling
+  bot.startPolling();
+  console.log("✅ Polling started");
 
   bot.on("polling_error", (err) => {
     console.error("Telegram polling error:", err.code, err.message);
