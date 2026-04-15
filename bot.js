@@ -9,6 +9,121 @@ const MODEL = process.env.MODEL || "claude-haiku-4-5-20251001";
 const PORT = process.env.PORT || 3000;
 const MAX_HISTORY = 20;
 
+// --- Archive RAG ---
+let archiveCards = [];
+const artistIndex = new Map();
+const titleIndex = new Map();
+const directorIndex = new Map();
+
+const STOPWORDS = new Set([
+  'the','and','for','that','this','with','are','was','what','who','how',
+  'when','where','can','you','your','just','about','from','they','been',
+  'have','its','like','but','not','any','did','does','ever','all','tell',
+  'know','want','show','give','some','more','one','get','let','make','see'
+]);
+
+function loadArchive() {
+  try {
+    archiveCards = require('./archive-index.json');
+    for (const card of archiveCards) {
+      const akey = card.artist.toLowerCase();
+      if (!artistIndex.has(akey)) artistIndex.set(akey, []);
+      artistIndex.get(akey).push(card);
+
+      titleIndex.set(card.title.toLowerCase(), card);
+
+      if (card.director) {
+        const dkey = card.director.toLowerCase();
+        if (!directorIndex.has(dkey)) directorIndex.set(dkey, []);
+        directorIndex.get(dkey).push(card);
+      }
+    }
+    console.log(`✅ Archive loaded: ${archiveCards.length} videos indexed`);
+  } catch (err) {
+    console.warn(`⚠️ Archive unavailable: ${err.message}`);
+  }
+}
+
+function searchArchive(query, limit = 4) {
+  if (!archiveCards.length || query.length < 3) return [];
+
+  const q = query.toLowerCase().trim();
+  const results = new Map();
+
+  for (const card of archiveCards) {
+    let score = 0;
+    const artist = card.artist.toLowerCase();
+    const title = card.title.toLowerCase();
+    const director = (card.director || '').toLowerCase();
+    const tags = (card.tags || []).join(' ');
+    const movement = (card.movement || '').toLowerCase();
+    const era = (card.era || '').toLowerCase();
+
+    if (artist === q) score += 5;
+    else if (artist.includes(q) || q.includes(artist)) score += 3;
+
+    if (title === q) score += 4;
+    else if (title.includes(q) || q.includes(title)) score += 2;
+
+    if (director && (director === q || director.includes(q) || q.includes(director.split(' ').pop()))) score += 4;
+
+    if (tags.includes(q)) score += 1;
+    if (movement.includes(q)) score += 1;
+    if (era.includes(q)) score += 1;
+
+    if (score > 0) {
+      const existing = results.get(card.id);
+      if (existing) existing.score += score;
+      else results.set(card.id, { card, score });
+    }
+  }
+
+  return [...results.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(r => r.card);
+}
+
+function getArchiveContext(messageText) {
+  if (!archiveCards.length) return '';
+
+  const words = messageText.toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !STOPWORDS.has(w));
+
+  const phrases = new Set(words);
+  for (let i = 0; i < words.length - 1; i++) phrases.add(`${words[i]} ${words[i+1]}`);
+  for (let i = 0; i < words.length - 2; i++) phrases.add(`${words[i]} ${words[i+1]} ${words[i+2]}`);
+
+  const seen = new Set();
+  const topCards = [];
+
+  for (const phrase of phrases) {
+    for (const card of searchArchive(phrase, 3)) {
+      if (!seen.has(card.id)) {
+        seen.add(card.id);
+        topCards.push(card);
+      }
+    }
+    if (topCards.length >= 5) break;
+  }
+
+  if (!topCards.length) return '';
+
+  const formatted = topCards.slice(0, 4).map(c => [
+    `${c.artist} — "${c.title}" (${c.year})`,
+    c.director ? `Director: ${c.director}` : null,
+    c.era ? `Era: ${c.era}` : null,
+    c.movement ? `Movement: ${c.movement}` : null,
+    c.context || null,
+    c.significance || null,
+    c.tags ? `Tags: ${c.tags.join(', ')}` : null,
+  ].filter(Boolean).join('\n')).join('\n\n---\n\n');
+
+  return `\n\nFROM THE ARCHIVE (draw on this if relevant — don't quote it verbatim):\n${formatted}`;
+}
+
 if (!TELEGRAM_TOKEN) {
   console.error("ERROR: Missing TELEGRAM_TOKEN");
   process.exit(1);
@@ -34,6 +149,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`HTTP health check listening on 0.0.0.0:${PORT}`);
+  loadArchive();
   startBot();
 });
 
@@ -206,10 +322,16 @@ async function startBot() {
     try {
       bot.sendChatAction(chatId, "typing");
 
+      // Search archive for relevant context
+      const archiveContext = getArchiveContext(text);
+      const systemWithContext = archiveContext
+        ? SYSTEM_PROMPT + archiveContext
+        : SYSTEM_PROMPT;
+
       const response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 1024,
-        system: SYSTEM_PROMPT,
+        system: systemWithContext,
         messages: history,
       });
 
